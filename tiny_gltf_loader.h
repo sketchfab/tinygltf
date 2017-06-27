@@ -400,14 +400,14 @@ struct BufferView{
   int buffer;  // Required
   size_t byteOffset;   // minimum 0, default 0
   size_t byteLength;   // required, minimum 1
-  size_t byteStride;  // minimum 4, maximum 252 (multiple of 4)
+  size_t byteStride;  // minimum 4, maximum 252 (multiple of 4), 0 means 'undefined'
   int target; // ["ARRAY_BUFFER", "ELEMENT_ARRAY_BUFFER"]
   int pad0;
   Value extras;
 
   BufferView()
     : byteOffset(0)
-    , byteStride(4)
+    , byteStride(0)
   {}
 
 };
@@ -797,6 +797,12 @@ static std::string FindFile(const std::vector<std::string> &paths,
 static std::string GetBaseDir(const std::string &filepath) {
   if (filepath.find_last_of("/\\") != std::string::npos)
     return filepath.substr(0, filepath.find_last_of("/\\"));
+  return "";
+}
+
+static std::string GetBaseName(const std::string &filepath) {
+  if (filepath.find_last_of("/\\") != std::string::npos)
+    return filepath.substr(filepath.find_last_of("/\\")+1);
   return "";
 }
 
@@ -1585,7 +1591,7 @@ static bool ParseBufferView(BufferView *bufferView, std::string *err,
     return false;
   }
 
-  double byteStride = 4.0;
+  double byteStride = 0.0;
   ParseNumberProperty(&byteLength, err, o, "byteStride", false);
 
   double target = 0.0;
@@ -2644,7 +2650,15 @@ static void SerializeParameterMap(ParameterMap &param, picojson::object &o)
   {
     if(paramIt->second.number_array.size())
     {
-      SerializeNumberArrayProperty<double>(paramIt->first, paramIt->second.number_array, o);
+      if(paramIt->second.number_array.size() == 1)
+      {
+        SerializeNumberProperty<double>(paramIt->first, paramIt->second.number_array[0], o);
+      }
+      else
+      {
+        SerializeNumberArrayProperty<double>(paramIt->first, paramIt->second.number_array, o);
+      }
+
     }
     else if(paramIt->second.json_double_value.size())
     {
@@ -2772,7 +2786,7 @@ static void SerializeGltfBuffer(Buffer &buffer, picojson::object &o, const std::
 {
   SerializeGltfBufferData(buffer.data, binFilePath);
   SerializeNumberProperty("byteLength", buffer.data.size(), o);
-  SerializeStringProperty("uri", binFilePath, o);
+  SerializeStringProperty("uri", GetBaseName(binFilePath), o);
 
   if(buffer.name.size())
     SerializeStringProperty("name", buffer.name, o);
@@ -2782,7 +2796,11 @@ static void SerializeGltfBufferView(BufferView &bufferView, picojson::object &o)
 {
   SerializeNumberProperty("buffer", bufferView.buffer, o);
   SerializeNumberProperty<size_t>("byteLength", bufferView.byteLength, o);
-  SerializeNumberProperty<size_t>("byteStride", bufferView.byteStride, o);
+
+  // byteStride is serialized only for vertex attributes (not SCALAR data)
+  if(bufferView.byteStride >= 4.0)
+    SerializeNumberProperty<size_t>("byteStride", bufferView.byteStride, o);
+
   SerializeNumberProperty<size_t>("byteOffset", bufferView.byteOffset, o);
   SerializeNumberProperty("target", bufferView.target, o);
 
@@ -2915,8 +2933,10 @@ static void SerializeGltfNode(Node &node, picojson::object &o)
       SerializeNumberProperty<int>("skin", node.skin, o);
     }
 
+  if(node.children.size())
+    SerializeNumberArrayProperty<int>("children", node.children, o);
+
   SerializeStringProperty("name", node.name, o);
-  SerializeNumberArrayProperty<int>("children", node.children, o);
 }
 
 static void SerializeGltfSampler(Sampler &sampler, picojson::object &o)
