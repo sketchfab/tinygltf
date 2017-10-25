@@ -33,8 +33,8 @@
 //  - base64: base64 decode/encode library.
 //  - stb_image: Image loading library.
 //
-#ifndef TINY_GLTF_LOADER_H_
-#define TINY_GLTF_LOADER_H_
+#ifndef TINY_GLTF_H_
+#define TINY_GLTF_H_
 
 #include <cassert>
 #include <cstring>
@@ -625,9 +625,9 @@ class TinyGLTFLoader {
 
 }  // namespace tinygltf
 
-#endif  // TINY_GLTF_LOADER_H_
+#endif  // TINY_GLTF_H_
 
-#ifdef TINYGLTF_LOADER_IMPLEMENTATION
+#ifdef TINYGLTF_IMPLEMENTATION
 #include <algorithm>
 //#include <cassert>
 #include <fstream>
@@ -3178,4 +3178,4 @@ bool TinyGLTFLoader::WriteGltfSceneToFile(Model *model, const std::string &filen
 
 }  // namespace tinygltf
 
-#endif  // TINYGLTF_LOADER_IMPLEMENTATION
+#endif  // TINYGLTF_IMPLEMENTATION
