@@ -327,6 +327,7 @@ struct Skin {
   Skin()
   {
     inverseBindMatrices = -1;
+    skeleton = -1;
   }
 };
 
@@ -356,7 +357,7 @@ struct Image{
   std::vector<unsigned char> image;
   int bufferView;  // (required if no uri)
   std::string mimeType;    // (required if no uri) ["image/jpeg", "image/png"]
-  std::string uri; // (reqiored if no mimeType)
+  std::string uri; // (required if no mimeType)
   Value extras;
 
   Image()
@@ -367,7 +368,7 @@ struct Image{
 
 struct Texture {
   int sampler;
-  int source;   // Required (not specified in the spec ?)
+  int source;
   Value extras;
 
   Texture()
@@ -395,20 +396,21 @@ struct BufferView{
   int buffer;  // Required
   size_t byteOffset;   // minimum 0, default 0
   size_t byteLength;   // required, minimum 1
-  size_t byteStride;  // minimum 4, maximum 252 (multiple of 4)
+  size_t byteStride;  // minimum 4, maximum 252 (multiple of 4), 0 means 'undefined'
   int target; // ["ARRAY_BUFFER", "ELEMENT_ARRAY_BUFFER"]
   int pad0;
   Value extras;
 
   BufferView()
     : byteOffset(0)
-    , byteStride(4)
-  {}  
+    , byteStride(0)
+    , target(-1)
+  {}
 
 };
 
 struct Accessor {
-  int bufferView; // optional in spec but required here since sparse accessor are not supported
+  int bufferView; // optional in spec but required here since sparse accessor are not yet supported
   std::string name;
   size_t byteOffset;
   size_t byteStride;
@@ -474,8 +476,7 @@ struct Primitive {
 typedef struct {
   std::string name;
   std::vector<Primitive> primitives;
-  std::vector<double> weights; // weights to be applied to the Morph Targets
-  std::vector<std::map<std::string, int> >targets;
+  std::vector<double> weights;  // weights to be applied to the morph targets
   ParameterMap extensions;
   Value extras;
 } Mesh;
@@ -500,7 +501,6 @@ class Node {
   std::vector<double> scale;        // length must be 0 or 3
   std::vector<double> translation;  // length must be 0 or 3
   std::vector<double> matrix;       // length must be 0 or 16
-  std::vector<double> weights; // The weights of the instantiated Morph Target
 
   Value extras;
 };
@@ -549,6 +549,7 @@ class Model {
 
   int defaultScene;
   std::vector<std::string> extensionsUsed;
+  std::vector<std::string> extensionsRequired;
 
   Asset asset;
 
@@ -1466,9 +1467,7 @@ static bool ParseTexture(Texture *texture, std::string *err,
   double source = -1.0;
   ParseNumberProperty(&sampler, err, o, "sampler", false);
 
-  if (!ParseNumberProperty(&source, err, o, "source", true)) {
-    return false;
-  }
+  ParseNumberProperty(&source, err, o, "source", false);
 
   texture->sampler = static_cast<int>(sampler);
   texture->source = static_cast<int>(source);
@@ -1581,7 +1580,7 @@ static bool ParseBufferView(BufferView *bufferView, std::string *err,
     return false;
   }
 
-  double byteStride = 4.0;
+  double byteStride = 0.0;
   ParseNumberProperty(&byteLength, err, o, "byteStride", false);
 
   double target = 0.0;
@@ -1714,6 +1713,25 @@ static bool ParsePrimitive(Primitive *primitive, std::string *err,
     return false;
   }
 
+  // Look for morph targets
+  picojson::object::const_iterator targetsObject = o.find("targets");
+  if ((targetsObject != o.end()) && (targetsObject->second).is<picojson::array>()) {
+    const picojson::array &targetArray =
+        (targetsObject->second).get<picojson::array>();
+    for (size_t i = 0; i < targetArray.size(); i++) {
+      std::map<std::string, int> targetAttribues;
+
+      const picojson::object &dict = targetArray[i].get<picojson::object>();
+      picojson::object::const_iterator dictIt(dict.begin());
+      picojson::object::const_iterator dictItEnd(dict.end());
+
+      for (; dictIt != dictItEnd; ++dictIt) {
+        targetAttribues[dictIt->first] = static_cast<int>(dictIt->second.get<double>());
+      }
+      primitive->targets.push_back(targetAttribues);
+    }
+  }
+
   ParseExtrasProperty(&(primitive->extras), o);
 
   return true;
@@ -1734,25 +1752,6 @@ static bool ParseMesh(Mesh *mesh, std::string *err, const picojson::object &o) {
         // Only add the primitive if the parsing succeeds.
         mesh->primitives.push_back(primitive);
       }
-    }
-  }
-
-  // Look for morph targets
-  picojson::object::const_iterator targetsObject = o.find("targets");
-  if ((targetsObject != o.end()) && (targetsObject->second).is<picojson::array>()) {
-    const picojson::array &targetArray =
-        (targetsObject->second).get<picojson::array>();
-    for (size_t i = 0; i < targetArray.size(); i++) {
-      std::map<std::string, int> targetAttribues;
-
-      const picojson::object &dict = targetArray[i].get<picojson::object>();
-      picojson::object::const_iterator dictIt(dict.begin());
-      picojson::object::const_iterator dictItEnd(dict.end());
-
-      for (; dictIt != dictItEnd; ++dictIt) {
-        targetAttribues[dictIt->first] = static_cast<int>(dictIt->second.get<double>());
-      }
-      mesh->targets.push_back(targetAttribues);
     }
   }
 
@@ -2053,7 +2052,7 @@ static bool ParseSkin(Skin *skin, std::string *err,
     return false;
   }
 
-  double skeleton;
+  double skeleton = -1.0;
   ParseNumberProperty(&skeleton, err, o, "skeleton", false, "Skin");
   skin->skeleton = static_cast<int>(skeleton);
 
@@ -2135,6 +2134,7 @@ if (v.contains("scenes") && v.get("scenes").is<picojson::array>()) {
   model->meshes.clear();
   model->nodes.clear();
   model->extensionsUsed.clear();
+  model->extensionsRequired.clear();
   model->defaultScene = -1;
 
   // 0. Parse Asset
@@ -2144,12 +2144,19 @@ if (v.contains("scenes") && v.get("scenes").is<picojson::array>()) {
     ParseAsset(&model->asset, err, root);
   }
 
-  // 0. Parse extensionUsed
+  // 0. Parse extensionsUsed ans extensionsRequired
   if (v.contains("extensionsUsed") && v.get("extensionsUsed").is<picojson::array>()) {
     const picojson::array &root = v.get("extensionsUsed").get<picojson::array>();
     for(unsigned int i=0; i< root.size(); ++i)
     {
       model->extensionsUsed.push_back(root[i].get<std::string>());
+    }
+  }
+  if (v.contains("extensionsRequired") && v.get("extensionsRequired").is<picojson::array>()) {
+    const picojson::array &root = v.get("extensionsRequired").get<picojson::array>();
+    for(unsigned int i=0; i< root.size(); ++i)
+    {
+      model->extensionsRequired.push_back(root[i].get<std::string>());
     }
   }
 
